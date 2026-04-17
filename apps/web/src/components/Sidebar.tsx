@@ -42,6 +42,7 @@ import {
   ProjectId,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
+  type ServerProvider,
   type ThreadEnvMode,
   ThreadId,
 } from "@t3tools/contracts";
@@ -93,8 +94,9 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import { toastManager } from "./ui/toast";
-import { formatRelativeTimeLabel } from "../timestampFormat";
+import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../timestampFormat";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
+import { formatUsagePercent, resolveUsageBarClassName, sortUsageWindows } from "./Sidebar.usage";
 import { Kbd } from "./ui/kbd";
 import {
   getArm64IntelBuildWarningDescription,
@@ -165,7 +167,7 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { CommandDialogTrigger } from "./ui/command";
 import { readEnvironmentApi } from "../environmentApi";
 import { useSettings, useUpdateSettings } from "~/hooks/useSettings";
-import { useServerKeybindings } from "../rpc/serverState";
+import { useServerKeybindings, useServerProviders } from "../rpc/serverState";
 import { derivePhysicalProjectKey, deriveProjectGroupingOverrideKey } from "../logicalProject";
 import {
   useSavedEnvironmentRegistryStore,
@@ -269,6 +271,116 @@ function buildThreadJumpLabelMap(input: {
   return mapping.size > 0 ? mapping : EMPTY_THREAD_JUMP_LABELS;
 }
 
+const SIDEBAR_USAGE_PROVIDER_ORDER = ["codex", "claudeAgent"] as const;
+const SIDEBAR_PROVIDER_LABELS: Record<ServerProvider["provider"], string> = {
+  codex: "Codex",
+  claudeAgent: "Claude",
+};
+
+function resolveProviderUsageMessage(provider: ServerProvider): string {
+  if (provider.usage?.message) {
+    return provider.usage.message;
+  }
+  if (!provider.enabled) {
+    return "Disabled";
+  }
+  if (!provider.installed) {
+    return "CLI not detected";
+  }
+  if (provider.auth.status === "unauthenticated") {
+    return "Sign in to sync usage";
+  }
+  if (provider.usage?.state === "syncing") {
+    return "Syncing latest usage";
+  }
+  if (provider.usage?.state === "unavailable") {
+    return "Usage unavailable";
+  }
+  return "No usage data yet";
+}
+
+const SidebarProviderUsagePanel = memo(function SidebarProviderUsagePanel({
+  providers,
+}: {
+  providers: ReadonlyArray<ServerProvider>;
+}) {
+  const visibleProviders = useMemo(
+    () =>
+      SIDEBAR_USAGE_PROVIDER_ORDER.flatMap((providerKind) => {
+        const provider = providers.find((candidate) => candidate.provider === providerKind);
+        return provider ? [provider] : [];
+      }),
+    [providers],
+  );
+
+  if (visibleProviders.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="px-1 py-1.5">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
+          Usage
+        </span>
+      </div>
+
+      <div className="divide-y divide-sidebar-border/50">
+        {visibleProviders.map((provider) => {
+          const usageWindows = provider.usage ? sortUsageWindows(provider.usage.windows) : [];
+          const checkedAt = provider.usage?.checkedAt ?? provider.checkedAt;
+
+          return (
+            <section key={provider.provider} className="py-2 first:pt-0 last:pb-0">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-foreground/90">
+                  {SIDEBAR_PROVIDER_LABELS[provider.provider] ?? provider.provider}
+                </span>
+                <span className="text-[10px] text-muted-foreground/70">
+                  {formatRelativeTimeLabel(checkedAt)}
+                </span>
+              </div>
+
+              {usageWindows.length > 0 ? (
+                <div className="space-y-2">
+                  {usageWindows.map((window) => (
+                    <div key={window.id} className="space-y-1">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <div className="flex min-w-0 items-baseline gap-2 text-[11px]">
+                          <span className="font-medium text-foreground">{window.label}</span>
+                          <span className="truncate text-muted-foreground/70">
+                            {window.resetsAt
+                              ? `Resets ${formatRelativeTimeUntilLabel(window.resetsAt)}`
+                              : "Reset unavailable"}
+                          </span>
+                        </div>
+                        <span className="shrink-0 font-medium tabular-nums text-[11px] text-foreground">
+                          {formatUsagePercent(window.percentUsed)}
+                        </span>
+                      </div>
+                      <div className="h-1 overflow-hidden rounded-full bg-sidebar-border/70">
+                        <div
+                          className={`h-full rounded-full transition-[width] ${resolveUsageBarClassName(
+                            window.level,
+                          )}`}
+                          style={{ width: `${window.percentUsed ?? 0}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[11px] leading-relaxed text-muted-foreground/80">
+                  {resolveProviderUsageMessage(provider)}
+                </div>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+});
 interface SidebarThreadRowProps {
   thread: SidebarThreadSummary;
   projectCwd: string | null;
@@ -2336,12 +2448,14 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
 
 const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
+  const providers = useServerProviders();
   const handleSettingsClick = useCallback(() => {
     void navigate({ to: "/settings" });
   }, [navigate]);
 
   return (
-    <SidebarFooter className="p-2">
+    <SidebarFooter className="gap-2 p-2">
+      <SidebarProviderUsagePanel providers={providers} />
       <SidebarUpdatePill />
       <SidebarMenu>
         <SidebarMenuItem>

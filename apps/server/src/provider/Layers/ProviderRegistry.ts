@@ -4,7 +4,7 @@
  * @module ProviderRegistryLive
  */
 import type { ProviderKind, ServerProvider } from "@t3tools/contracts";
-import { Effect, Equal, FileSystem, Layer, Path, PubSub, Ref, Stream } from "effect";
+import { Effect, Equal, FileSystem, Layer, Option, Path, PubSub, Ref, Stream } from "effect";
 
 import { ServerConfig } from "../../config.ts";
 import { ClaudeProviderLive } from "./ClaudeProvider.ts";
@@ -14,6 +14,7 @@ import { ClaudeProvider } from "../Services/ClaudeProvider.ts";
 import type { CodexProviderShape } from "../Services/CodexProvider.ts";
 import { CodexProvider } from "../Services/CodexProvider.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
+import { ProviderService } from "../Services/ProviderService";
 import {
   hydrateCachedProvider,
   PROVIDER_CACHE_IDS,
@@ -22,6 +23,10 @@ import {
   resolveProviderStatusCachePath,
   writeProviderStatusCache,
 } from "../providerStatusCache.ts";
+import {
+  isProviderUsageRuntimeEvent,
+  mergeProviderRuntimeEventIntoSnapshot,
+} from "../providerUsage.ts";
 
 const loadProviders = (
   codexProvider: CodexProviderShape,
@@ -41,6 +46,7 @@ export const ProviderRegistryLive = Layer.effect(
   Effect.gen(function* () {
     const codexProvider = yield* CodexProvider;
     const claudeProvider = yield* ClaudeProvider;
+    const providerService = yield* Effect.serviceOption(ProviderService);
     const config = yield* ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -146,6 +152,15 @@ export const ProviderRegistryLive = Layer.effect(
       return yield* upsertProviders([provider], options);
     });
 
+    const applyRuntimeProviderEvent = Effect.fn("applyRuntimeProviderEvent")(function* (
+      provider: ServerProvider,
+      options?: {
+        readonly publish?: boolean;
+      },
+    ) {
+      return yield* syncProvider(provider, options);
+    });
+
     const refresh = Effect.fn("refresh")(function* (provider?: ProviderKind) {
       switch (provider) {
         case "codex":
@@ -180,6 +195,29 @@ export const ProviderRegistryLive = Layer.effect(
     yield* Stream.runForEach(claudeProvider.streamChanges, (provider) =>
       syncProvider(provider),
     ).pipe(Effect.forkScoped);
+    if (Option.isSome(providerService)) {
+      yield* Stream.runForEach(providerService.value.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (!isProviderUsageRuntimeEvent(event)) {
+            return;
+          }
+
+          const currentProvider = (yield* Ref.get(providersRef)).find(
+            (provider) => provider.provider === event.provider,
+          );
+          if (!currentProvider) {
+            return;
+          }
+
+          const nextProvider = mergeProviderRuntimeEventIntoSnapshot(currentProvider, event);
+          if (Equal.equals(currentProvider, nextProvider)) {
+            return;
+          }
+
+          yield* applyRuntimeProviderEvent(nextProvider);
+        }),
+      ).pipe(Effect.forkScoped);
+    }
 
     return {
       getProviders: Ref.get(providersRef),
