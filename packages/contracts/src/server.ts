@@ -81,6 +81,37 @@ export const ServerProviderSkill = Schema.Struct({
 });
 export type ServerProviderSkill = typeof ServerProviderSkill.Type;
 
+export const ServerProviderUsageState = Schema.Literals(["available", "syncing", "unavailable"]);
+export type ServerProviderUsageState = typeof ServerProviderUsageState.Type;
+
+export const ServerProviderUsageLevel = Schema.Literals([
+  "normal",
+  "warning",
+  "critical",
+  "exhausted",
+]);
+export type ServerProviderUsageLevel = typeof ServerProviderUsageLevel.Type;
+
+export const ServerProviderUsageWindow = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  percentUsed: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  resetsAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  level: ServerProviderUsageLevel.pipe(Schema.withDecodingDefault(Effect.succeed("normal"))),
+  exhausted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+});
+export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
+
+export const ServerProviderUsage = Schema.Struct({
+  state: ServerProviderUsageState,
+  checkedAt: IsoDateTime,
+  windows: Schema.Array(ServerProviderUsageWindow).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  message: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerProviderUsage = typeof ServerProviderUsage.Type;
+
 export const ServerProvider = Schema.Struct({
   provider: ProviderKind,
   enabled: Schema.Boolean,
@@ -95,6 +126,7 @@ export const ServerProvider = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   skills: Schema.Array(ServerProviderSkill).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  usage: Schema.optional(ServerProviderUsage),
 });
 export type ServerProvider = typeof ServerProvider.Type;
 

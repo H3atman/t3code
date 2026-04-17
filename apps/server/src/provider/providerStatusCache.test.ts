@@ -65,6 +65,20 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
       checkedAt: "2026-04-10T12:00:00.000Z",
       models: [],
       message: "Cached message",
+      usage: {
+        state: "available",
+        checkedAt: "2026-04-10T12:00:00.000Z",
+        windows: [
+          {
+            id: "5h",
+            label: "5h",
+            percentUsed: 42,
+            resetsAt: "2026-04-10T17:00:00.000Z",
+            level: "normal",
+            exhausted: false,
+          },
+        ],
+      },
       skills: [
         {
           name: "github:gh-fix-ci",
@@ -106,6 +120,7 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         checkedAt: cachedCodex.checkedAt,
         slashCommands: cachedCodex.slashCommands,
         skills: cachedCodex.skills,
+        usage: cachedCodex.usage,
         message: cachedCodex.message,
       },
     );

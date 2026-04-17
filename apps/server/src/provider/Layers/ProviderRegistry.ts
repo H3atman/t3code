@@ -14,6 +14,7 @@ import { ClaudeProvider } from "../Services/ClaudeProvider";
 import type { CodexProviderShape } from "../Services/CodexProvider";
 import { CodexProvider } from "../Services/CodexProvider";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry";
+import { ProviderService } from "../Services/ProviderService";
 import {
   hydrateCachedProvider,
   PROVIDER_CACHE_IDS,
@@ -22,6 +23,7 @@ import {
   resolveProviderStatusCachePath,
   writeProviderStatusCache,
 } from "../providerStatusCache";
+import { mergeProviderRuntimeEventIntoSnapshot } from "../providerUsage";
 
 const loadProviders = (
   codexProvider: CodexProviderShape,
@@ -41,6 +43,7 @@ export const ProviderRegistryLive = Layer.effect(
   Effect.gen(function* () {
     const codexProvider = yield* CodexProvider;
     const claudeProvider = yield* ClaudeProvider;
+    const providerService = yield* ProviderService;
     const config = yield* ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -146,6 +149,15 @@ export const ProviderRegistryLive = Layer.effect(
       return yield* upsertProviders([provider], options);
     });
 
+    const applyRuntimeProviderEvent = Effect.fn("applyRuntimeProviderEvent")(function* (
+      provider: ServerProvider,
+      options?: {
+        readonly publish?: boolean;
+      },
+    ) {
+      return yield* syncProvider(provider, options);
+    });
+
     const refresh = Effect.fn("refresh")(function* (provider?: ProviderKind) {
       switch (provider) {
         case "codex":
@@ -179,6 +191,26 @@ export const ProviderRegistryLive = Layer.effect(
     ).pipe(Effect.forkScoped);
     yield* Stream.runForEach(claudeProvider.streamChanges, (provider) =>
       syncProvider(provider),
+    ).pipe(Effect.forkScoped);
+    yield* Stream.runForEach(providerService.streamEvents, (event) =>
+      Effect.gen(function* () {
+        if (event.type !== "account.updated" && event.type !== "account.rate-limits.updated") {
+          return;
+        }
+
+        const providers = yield* Ref.get(providersRef);
+        const currentProvider = providers.find((provider) => provider.provider === event.provider);
+        if (!currentProvider) {
+          return;
+        }
+
+        const nextProvider = mergeProviderRuntimeEventIntoSnapshot(currentProvider, event);
+        if (Equal.equals(currentProvider, nextProvider)) {
+          return;
+        }
+
+        yield* applyRuntimeProviderEvent(nextProvider);
+      }),
     ).pipe(Effect.forkScoped);
 
     return {

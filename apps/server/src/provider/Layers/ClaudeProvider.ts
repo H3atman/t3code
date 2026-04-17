@@ -26,6 +26,7 @@ import {
   spawnAndCollect,
   type CommandResult,
 } from "../providerSnapshot";
+import { resolveClaudeUsageSnapshot } from "../claudeUsage";
 import { makeManagedServerProvider } from "../makeManagedServerProvider";
 import { ClaudeProvider } from "../Services/ClaudeProvider";
 import { ServerSettingsService } from "../../serverSettings";
@@ -474,6 +475,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   resolveSlashCommands?: (
     binaryPath: string,
   ) => Effect.Effect<ReadonlyArray<ServerProviderSlashCommand> | undefined>,
+  resolveUsage?: () => Effect.Effect<ServerProvider["usage"] | undefined>,
 ): Effect.fn.Return<
   ServerProvider,
   ServerSettingsError,
@@ -644,12 +646,17 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
 
   const parsed = parseClaudeAuthStatusFromOutput(authProbe.success.value);
   const authMetadata = claudeAuthMetadata({ subscriptionType, authMethod });
+  const usage =
+    parsed.auth.status === "authenticated" && authMetadata?.type !== "apiKey" && resolveUsage
+      ? yield* resolveUsage().pipe(Effect.orElseSucceed(() => undefined))
+      : undefined;
   return buildServerProvider({
     provider: PROVIDER,
     enabled: claudeSettings.enabled,
     checkedAt,
     models,
     slashCommands: dedupedSlashCommands,
+    ...(usage ? { usage } : {}),
     probe: {
       installed: true,
       version: parsedVersion,
@@ -724,6 +731,7 @@ export const ClaudeProviderLive = Layer.effect(
         Cache.get(subscriptionProbeCache, binaryPath).pipe(
           Effect.map((probe) => probe?.slashCommands),
         ),
+      () => Effect.tryPromise(() => resolveClaudeUsageSnapshot()),
     ).pipe(
       Effect.provideService(ServerSettingsService, serverSettings),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
