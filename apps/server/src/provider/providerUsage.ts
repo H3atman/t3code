@@ -9,7 +9,7 @@ import type {
   ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 
-import { codexAuthSubLabel, codexAuthSubType, readCodexAccountSnapshot } from "./codexAccount";
+import { codexAuthSubLabel, codexAuthSubType, readCodexAccountSnapshot } from "./codexAccount.ts";
 
 const WINDOW_CONTAINER_KEYS = ["windows", "limits", "rateLimits", "rate_limits"] as const;
 const WINDOW_PERCENT_KEYS = [

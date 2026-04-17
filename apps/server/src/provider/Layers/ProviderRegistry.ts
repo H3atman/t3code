@@ -14,7 +14,7 @@ import { ClaudeProvider } from "../Services/ClaudeProvider.ts";
 import type { CodexProviderShape } from "../Services/CodexProvider.ts";
 import { CodexProvider } from "../Services/CodexProvider.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
-import { ProviderService } from "../Services/ProviderService";
+import { ProviderService } from "../Services/ProviderService.ts";
 import {
   hydrateCachedProvider,
   PROVIDER_CACHE_IDS,
