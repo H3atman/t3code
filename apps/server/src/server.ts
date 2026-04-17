@@ -163,6 +163,8 @@ const ProviderLayerLive = Layer.unwrap(
   }),
 );
 
+const ProviderRegistryRuntimeLive = ProviderRegistryLive.pipe(Layer.provide(ProviderLayerLive));
+
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 
 const GitManagerLayerLive = GitManagerLive.pipe(
@@ -203,7 +205,7 @@ const RuntimeDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(TerminalLayerLive),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
-  Layer.provideMerge(ProviderRegistryLive),
+  Layer.provideMerge(ProviderRegistryRuntimeLive),
   Layer.provideMerge(ServerSettingsLive),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectFaviconResolverLive),

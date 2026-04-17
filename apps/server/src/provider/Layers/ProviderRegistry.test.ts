@@ -34,6 +34,7 @@ import { haveProvidersChanged, ProviderRegistryLive } from "./ProviderRegistry";
 import { ServerConfig } from "../../config";
 import { ServerSettingsService, type ServerSettingsShape } from "../../serverSettings";
 import { ProviderRegistry } from "../Services/ProviderRegistry";
+import { ProviderService } from "../Services/ProviderService";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -123,6 +124,23 @@ function makeMutableServerSettingsService(
     } satisfies ServerSettingsShape;
   });
 }
+
+function makeProviderServiceTestLayer(streamEvents: Stream.Stream<any> = Stream.empty) {
+  return Layer.succeed(ProviderService, {
+    startSession: () => Effect.die(new Error("not used in ProviderRegistry tests")),
+    sendTurn: () => Effect.die(new Error("not used in ProviderRegistry tests")),
+    interruptTurn: () => Effect.die(new Error("not used in ProviderRegistry tests")),
+    respondToRequest: () => Effect.die(new Error("not used in ProviderRegistry tests")),
+    respondToUserInput: () => Effect.die(new Error("not used in ProviderRegistry tests")),
+    stopSession: () => Effect.die(new Error("not used in ProviderRegistry tests")),
+    listSessions: () => Effect.die(new Error("not used in ProviderRegistry tests")),
+    getCapabilities: () => Effect.die(new Error("not used in ProviderRegistry tests")),
+    rollbackConversation: () => Effect.die(new Error("not used in ProviderRegistry tests")),
+    streamEvents,
+  });
+}
+
+const providerServiceTestLayer = makeProviderServiceTestLayer();
 
 /**
  * Create a temporary CODEX_HOME scoped to the current Effect test.
@@ -571,6 +589,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
             Layer.provideMerge(Layer.succeed(ServerSettingsService, serverSettings)),
+            Layer.provideMerge(providerServiceTestLayer),
             Layer.provideMerge(
               ServerConfig.layerTest(process.cwd(), {
                 prefix: "t3-provider-registry-",
@@ -625,6 +644,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
             Layer.provideMerge(Layer.succeed(ServerSettingsService, serverSettings)),
+            Layer.provideMerge(providerServiceTestLayer),
             Layer.provideMerge(
               ServerConfig.layerTest(process.cwd(), {
                 prefix: "t3-provider-registry-",
@@ -686,6 +706,91 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
               updated.find((status) => status.provider === "codex")?.status,
               "error",
             );
+          }).pipe(Effect.provide(runtimeServices));
+        }),
+      );
+
+      it.effect("merges runtime rate-limit events into provider snapshots", () =>
+        Effect.gen(function* () {
+          const serverSettings = yield* makeMutableServerSettingsService();
+          const runtimeEvents = yield* PubSub.unbounded<any>();
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const providerRegistryLayer = ProviderRegistryLive.pipe(
+            Layer.provideMerge(Layer.succeed(ServerSettingsService, serverSettings)),
+            Layer.provideMerge(makeProviderServiceTestLayer(Stream.fromPubSub(runtimeEvents))),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), {
+                prefix: "t3-provider-registry-",
+              }),
+            ),
+            Layer.provideMerge(
+              mockCommandSpawnerLayer((command, args) => {
+                const joined = args.join(" ");
+                if (joined === "--version") {
+                  if (command === "codex") {
+                    return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+                  }
+                  return { stdout: "", stderr: "spawn ENOENT", code: 1 };
+                }
+                if (joined === "login status") {
+                  return { stdout: "Logged in\n", stderr: "", code: 0 };
+                }
+                throw new Error(`Unexpected args: ${joined}`);
+              }),
+            ),
+          );
+          const runtimeServices = yield* Layer.build(
+            Layer.mergeAll(
+              Layer.succeed(ServerSettingsService, serverSettings),
+              providerRegistryLayer,
+            ),
+          ).pipe(Scope.provide(scope));
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry;
+            yield* registry.refresh("codex");
+
+            yield* PubSub.publish(runtimeEvents, {
+              type: "account.rate-limits.updated",
+              eventId: "evt-rate-limits-1",
+              provider: "codex",
+              createdAt: "2026-04-17T02:00:00.000Z",
+              threadId: "thread-1",
+              payload: {
+                rateLimits: {
+                  five_hour: {
+                    utilization: 0.42,
+                    resets_at: "2026-04-17T05:00:00.000Z",
+                  },
+                },
+              },
+            });
+
+            for (let attempt = 0; attempt < 20; attempt += 1) {
+              const providers = yield* registry.getProviders;
+              const codex = providers.find((provider) => provider.provider === "codex");
+              if (codex?.usage) {
+                assert.deepStrictEqual(codex.usage, {
+                  state: "available",
+                  checkedAt: "2026-04-17T02:00:00.000Z",
+                  windows: [
+                    {
+                      id: "five-hour",
+                      label: "5h",
+                      percentUsed: 42,
+                      resetsAt: "2026-04-17T05:00:00.000Z",
+                      level: "normal",
+                      exhausted: false,
+                    },
+                  ],
+                });
+                return;
+              }
+              yield* Effect.sleep("10 millis");
+            }
+
+            assert.fail("expected codex provider usage to update from runtime event");
           }).pipe(Effect.provide(runtimeServices));
         }),
       );
@@ -1019,6 +1124,59 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
               input: { hint: "pr-or-branch" },
             },
           ]);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("includes direct claude usage in the provider snapshot when available", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            () => Effect.succeed("pro"),
+            undefined,
+            () =>
+              Effect.succeed({
+                state: "available",
+                checkedAt: "2026-04-17T04:00:00.000Z",
+                windows: [
+                  {
+                    id: "five-hour",
+                    label: "5h",
+                    percentUsed: 64,
+                    resetsAt: "2026-04-17T05:00:00.000Z",
+                    level: "normal",
+                    exhausted: false,
+                  },
+                ],
+              }),
+          );
+
+          assert.deepStrictEqual(status.usage, {
+            state: "available",
+            checkedAt: "2026-04-17T04:00:00.000Z",
+            windows: [
+              {
+                id: "five-hour",
+                label: "5h",
+                percentUsed: 64,
+                resetsAt: "2026-04-17T05:00:00.000Z",
+                level: "normal",
+                exhausted: false,
+              },
+            ],
+          });
         }).pipe(
           Effect.provide(
             mockSpawnerLayer((args) => {

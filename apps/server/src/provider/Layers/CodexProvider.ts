@@ -46,6 +46,7 @@ import {
   type CodexAccountSnapshot,
 } from "../codexAccount";
 import { probeCodexDiscovery } from "../codexAppServer";
+import { resolveCodexUsageSnapshot } from "../codexUsage";
 import { CodexProvider } from "../Services/CodexProvider";
 import { ServerSettingsService } from "../../serverSettings";
 import { ServerSettingsError } from "@t3tools/contracts";
@@ -341,6 +342,9 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     readonly homePath?: string;
     readonly cwd: string;
   }) => Effect.Effect<ReadonlyArray<ServerProviderSkill> | undefined>,
+  resolveUsage?: (input: {
+    readonly homePath?: string;
+  }) => Effect.Effect<ServerProvider["usage"] | undefined>,
 ): Effect.fn.Return<
   ServerProvider,
   ServerSettingsError,
@@ -532,12 +536,19 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   const parsed = parseAuthStatusFromOutput(authProbe.success.value);
   const authType = codexAuthSubType(account);
   const authLabel = codexAuthSubLabel(account);
+  const usage =
+    parsed.auth.status === "authenticated" && authType !== "apiKey" && resolveUsage
+      ? yield* resolveUsage({
+          ...(codexSettings.homePath ? { homePath: codexSettings.homePath } : {}),
+        }).pipe(Effect.orElseSucceed(() => undefined))
+      : undefined;
   return buildServerProvider({
     provider: PROVIDER,
     enabled: codexSettings.enabled,
     checkedAt,
     models: resolvedModels,
     skills,
+    ...(usage ? { usage } : {}),
     probe: {
       installed: true,
       version: parsedVersion,
@@ -626,6 +637,7 @@ export const CodexProviderLive = Layer.effect(
           cwd: process.cwd(),
         }).pipe(Effect.map((discovery) => discovery?.account)),
       (input) => getDiscovery(input).pipe(Effect.map((discovery) => discovery?.skills)),
+      (input) => Effect.sync(() => resolveCodexUsageSnapshot(input)),
     ).pipe(
       Effect.provideService(ServerSettingsService, serverSettings),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
