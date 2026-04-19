@@ -1,5 +1,45 @@
 import type { ServerProvider, ServerProviderUsageWindow } from "@t3tools/contracts";
 
+const FIVE_HOUR_WINDOW_KEYS = new Set(["5h", "5-hour", "five-hour", "fivehour"]);
+const SEVEN_DAY_WINDOW_KEYS = new Set(["7d", "7-day", "seven-day", "sevenday"]);
+
+function normalizeWindowKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function canonicalWindowOrder(window: ServerProviderUsageWindow): number {
+  const keys = [window.id, window.label].map(normalizeWindowKey);
+
+  if (keys.some((key) => FIVE_HOUR_WINDOW_KEYS.has(key))) {
+    return 0;
+  }
+
+  if (keys.some((key) => SEVEN_DAY_WINDOW_KEYS.has(key))) {
+    return 1;
+  }
+
+  return 2;
+}
+
+export function orderProviderUsageWindows(
+  windows: ReadonlyArray<ServerProviderUsageWindow>,
+): ServerProviderUsageWindow[] {
+  return windows
+    .map((window, index) => ({ window, index }))
+    .toSorted((left, right) => {
+      const rankDifference = canonicalWindowOrder(left.window) - canonicalWindowOrder(right.window);
+      if (rankDifference !== 0) {
+        return rankDifference;
+      }
+      return left.index - right.index;
+    })
+    .map(({ window }) => window);
+}
+
 export function selectPrimaryProviderUsageWindow(
   provider: Pick<ServerProvider, "usage">,
 ): ServerProviderUsageWindow | null {
