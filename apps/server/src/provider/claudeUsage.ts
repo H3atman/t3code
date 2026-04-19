@@ -249,9 +249,7 @@ function parseIsoDate(value: unknown): string | null {
   return parsed.toISOString();
 }
 
-function levelFromPercent(
-  percentUsed: number | null,
-): ServerProviderUsageWindow["level"] {
+function levelFromPercent(percentUsed: number | null): ServerProviderUsageWindow["level"] {
   if ((percentUsed ?? 0) >= 100) return "exhausted";
   if ((percentUsed ?? 0) >= 85) return "critical";
   if ((percentUsed ?? 0) >= 70) return "warning";

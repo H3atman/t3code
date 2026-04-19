@@ -4,6 +4,7 @@ import type { ServerProvider } from "@t3tools/contracts";
 import {
   formatProviderUsagePercent,
   formatProviderUsageResetAt,
+  orderProviderUsageWindows,
   selectPrimaryProviderUsageWindow,
   shortProviderPlanLabel,
 } from "./providerUsage";
@@ -74,5 +75,36 @@ describe("providerUsage", () => {
     expect(formatProviderUsageResetAt("2026-04-17T01:30:00.000Z")).toBe("1h 30m");
 
     vi.useRealTimers();
+  });
+
+  it("orders sidebar usage windows with 5h first and 7d second", () => {
+    const ordered = orderProviderUsageWindows([
+      {
+        id: "monthly",
+        label: "Monthly",
+        percentUsed: 12,
+        resetsAt: null,
+        level: "normal",
+        exhausted: false,
+      },
+      {
+        id: "secondary",
+        label: "7d",
+        percentUsed: 84,
+        resetsAt: null,
+        level: "warning",
+        exhausted: false,
+      },
+      {
+        id: "primary",
+        label: "5h",
+        percentUsed: 41,
+        resetsAt: null,
+        level: "normal",
+        exhausted: false,
+      },
+    ]);
+
+    expect(ordered.map((window) => window.label)).toEqual(["5h", "7d", "Monthly"]);
   });
 });

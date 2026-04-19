@@ -1,10 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-  ServerProvider,
-  ServerProviderUsageWindow,
-} from "@t3tools/contracts";
+import type { ServerProvider, ServerProviderUsageWindow } from "@t3tools/contracts";
 
 export interface CodexUsageDependencies {
   readonly homePath?: string;
@@ -66,11 +63,7 @@ function findLatestRollout(codexHome: string): string | undefined {
         stack.push(full);
         continue;
       }
-      if (
-        !entry.isFile() ||
-        !entry.name.startsWith("rollout-") ||
-        !entry.name.endsWith(".jsonl")
-      ) {
+      if (!entry.isFile() || !entry.name.startsWith("rollout-") || !entry.name.endsWith(".jsonl")) {
         continue;
       }
       try {
