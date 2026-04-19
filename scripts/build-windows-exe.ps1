@@ -25,15 +25,18 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 
-function Assert-CommandExists {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$Name
-  )
-
-  if (-not (Get-Command -Name $Name -ErrorAction SilentlyContinue)) {
-    throw "Required command '$Name' was not found in PATH."
+function Resolve-BunPath {
+  $bunCommand = Get-Command bun -ErrorAction SilentlyContinue
+  if ($bunCommand) {
+    return $bunCommand.Source
   }
+
+  $defaultBunPath = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
+  if (Test-Path -LiteralPath $defaultBunPath) {
+    return $defaultBunPath
+  }
+
+  throw "Could not find bun. Install Bun or add it to PATH."
 }
 
 function Format-Command {
@@ -132,44 +135,25 @@ function Assert-WindowsSigningEnvironment {
   }
 }
 
-function Assert-WindowsNativeBuildTools {
-  $vswherePath = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-  if (-not (Test-Path -LiteralPath $vswherePath)) {
-    throw @"
-Visual Studio Build Tools were not found.
-Install Visual Studio 2022 Build Tools with the 'Desktop development with C++' workload,
-then rerun this script.
-"@
-  }
-
-  $vsInstallationPath = & $vswherePath `
-    -latest `
-    -products * `
-    -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-    -property installationPath
-
-  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vsInstallationPath)) {
-    throw @"
-Visual Studio C++ build tools were not found.
-Install Visual Studio 2022 Build Tools with the 'Desktop development with C++' workload,
-then rerun this script.
-"@
-  }
-}
-
 $isRunningOnWindows = $env:OS -eq "Windows_NT"
 
 if (-not $isRunningOnWindows) {
   throw "This script is intended to run on Windows."
 }
 
-Assert-CommandExists -Name "bun"
-Assert-WindowsNativeBuildTools
+$bunExe = Resolve-BunPath
+$bunBinDir = Split-Path -Parent $bunExe
+if (-not ($env:Path -split ";" | Where-Object { $_ -eq $bunBinDir })) {
+  $env:Path = "$bunBinDir;$env:Path"
+}
 
 $resolvedOutputDir = Resolve-OutputDirectory -Path $OutputDir -RepoRoot $repoRoot
 
 Push-Location $repoRoot
 try {
+  Write-Host "Repo root: $repoRoot"
+  Write-Host "Using Bun: $bunExe"
+
   if ($Signed) {
     Assert-WindowsSigningEnvironment
   }
@@ -193,7 +177,7 @@ try {
   }
 
   $buildCommand = @(
-    "bun",
+    $bunExe,
     "run",
     "dist:desktop:artifact"
   )
