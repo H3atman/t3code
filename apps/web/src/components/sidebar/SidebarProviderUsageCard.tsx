@@ -152,6 +152,23 @@ export function SidebarProviderUsageCard() {
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const refreshingRef = useRef(false);
   const providers = useServerProviders();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
+  const refreshUsage = useCallback(() => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setIsRefreshing(true);
+    void ensureLocalApi()
+      .server.refreshProviders()
+      .catch((error: unknown) => {
+        console.warn("Failed to refresh providers", error);
+      })
+      .finally(() => {
+        refreshingRef.current = false;
+        setIsRefreshing(false);
+      });
+  }, []);
+
   const usageProviders = SIDEBAR_PROVIDER_ORDER.flatMap((providerKind) => {
     const provider = providers.find((candidate) => candidate.provider === providerKind);
     return provider ? [provider] : [];
