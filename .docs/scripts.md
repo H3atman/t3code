@@ -15,6 +15,8 @@
 - `bun run dist:desktop:dmg:x64` — Builds an Intel macOS `.dmg`.
 - `bun run dist:desktop:linux` — Builds a Linux AppImage into `./release`.
 - `bun run dist:desktop:win` — Builds a Windows NSIS installer into `./release`.
+- `powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-exe.ps1` — Runs `bun fmt`, `bun lint`, `bun typecheck`, then builds the Windows `.exe` installer into `./release`.
+- Windows desktop packaging requires Visual Studio 2022 Build Tools with the `Desktop development with C++` workload because Electron rebuilds native modules during packaging.
 
 ## Desktop `.dmg` packaging notes
 
