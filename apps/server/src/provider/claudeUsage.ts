@@ -82,7 +82,12 @@ function readClaudeOauthCredentials(
     return undefined;
   }
 
-  const parsed = JSON.parse(fs.readFileSync(credentialsPath, "utf8")) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(credentialsPath, "utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
   const oauth = asRecord(asRecord(parsed)?.claudeAiOauth);
   const accessToken = asString(oauth?.accessToken);
 

@@ -44,6 +44,23 @@ afterEach(() => {
 });
 
 describe("resolveClaudeUsageSnapshot", () => {
+  it("treats malformed credentials JSON as missing credentials", async () => {
+    const homeDir = makeTempHomeDir();
+    const configDir = path.join(homeDir, ".claude");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, ".credentials.json"), "{invalid json", "utf8");
+
+    const usage = await resolveClaudeUsageSnapshot({
+      homeDir: () => homeDir,
+      now: () => Date.UTC(2026, 3, 17, 2, 0, 0),
+      fetchImpl: async () => {
+        throw new Error("fetch should not be called when credentials are invalid");
+      },
+    });
+
+    expect(usage).toBeUndefined();
+  });
+
   it("normalizes direct Claude usage responses into provider usage windows", async () => {
     const homeDir = makeTempHomeDir();
     writeClaudeCredentials(homeDir);
