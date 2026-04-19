@@ -525,6 +525,12 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
     }
     buildConfig.win = winConfig;
+    // node-pty is our only runtime native dependency and ships N-API prebuilds
+    // for win32-{x64,arm64}, which are ABI-stable across Electron versions.
+    // Skipping @electron/rebuild avoids forcing a full Visual Studio toolchain
+    // on Windows packaging hosts just to recompile a binary we already have.
+    buildConfig.npmRebuild = false;
+    buildConfig.buildDependenciesFromSource = false;
   }
 
   return buildConfig;
@@ -548,6 +554,73 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   if (platform === "win") {
     yield* stageWindowsIcons(stageResourcesDir);
   }
+});
+
+// electron-builder downloads winCodeSign-2.6.0.7z and has its bundled
+// `app-builder` binary extract it via the bundled 7za 21.07. The archive
+// contains two macOS dylib symlinks (libcrypto.dylib, libssl.dylib) whose
+// creation requires SeCreateSymbolicLinkPrivilege, i.e. Windows Developer Mode
+// or an elevated shell. Without that privilege, 7za exits with code 2, so
+// app-builder never renames its temporary extraction directory to the canonical
+// `winCodeSign` folder and retries on every build. However, the temp folder
+// *does* contain a fully usable extraction (the symlinks are the only missing
+// entries, and we never need the macOS dylibs when packaging for Windows).
+//
+// Pre-populate the canonical cache folder from a leftover temp extraction so
+// app-builder's cache lookup short-circuits the download + 7za step entirely.
+const ensureWinCodeSignCache = Effect.fn("ensureWinCodeSignCache")(function* () {
+  if (process.platform !== "win32") return;
+
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) {
+    yield* Effect.log(
+      "[desktop-artifact] LOCALAPPDATA not set; skipping winCodeSign cache pre-populate.",
+    );
+    return;
+  }
+
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  const cacheDir = path.join(localAppData, "electron-builder", "Cache", "winCodeSign");
+  // app-builder pins winCodeSign-2.6.0 as the release, and renames a temp
+  // extraction directory to this canonical name on success. Matching the
+  // convention short-circuits app-builder's cache lookup.
+  const finalDirName = "winCodeSign-2.6.0";
+  const finalDir = path.join(cacheDir, finalDirName);
+  const completenessMarker = path.join("windows-10", "x64", "signtool.exe");
+
+  if ((yield* fs.exists(finalDir)) && (yield* fs.exists(path.join(finalDir, completenessMarker)))) {
+    return;
+  }
+
+  if (!(yield* fs.exists(cacheDir))) return;
+
+  const entries = yield* fs.readDirectory(cacheDir);
+  for (const entry of entries) {
+    if (entry === finalDirName) continue;
+    const candidate = path.join(cacheDir, entry);
+    const stat = yield* fs.stat(candidate).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!stat || stat.type !== "Directory") continue;
+    if (!(yield* fs.exists(path.join(candidate, completenessMarker)))) continue;
+
+    yield* Effect.log(
+      `[desktop-artifact] Promoting winCodeSign extraction ${candidate} to ${finalDir}`,
+    );
+    yield* fs.rename(candidate, finalDir).pipe(
+      Effect.catch(() =>
+        Effect.gen(function* () {
+          yield* fs.copy(candidate, finalDir);
+          yield* fs.remove(candidate, { recursive: true });
+        }),
+      ),
+    );
+    return;
+  }
+
+  yield* Effect.log(
+    "[desktop-artifact] No reusable winCodeSign cache found; electron-builder will attempt a fresh extraction. If it fails on macOS dylib symlinks, enable Windows Developer Mode or run this build from an elevated shell.",
+  );
 });
 
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
@@ -710,6 +783,27 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     })`bun install --production`,
   );
 
+  // msgpackr pulls in msgpackr-extract as an optional native dependency, but
+  // msgpackr falls back to a pure-JS implementation when it is absent. We
+  // don't use msgpackr ourselves (it arrives transitively via @effect/*), so
+  // drop the native package before electron-builder runs @electron/rebuild.
+  // This avoids requiring a full Visual Studio toolchain on Windows hosts
+  // just to compile a module we never execute.
+  const stageNodeModulesDir = path.join(stageAppDir, "node_modules");
+  yield* Effect.all(
+    [
+      path.join(stageNodeModulesDir, "msgpackr-extract"),
+      path.join(stageNodeModulesDir, "@msgpackr-extract"),
+    ].map((dir) =>
+      Effect.gen(function* () {
+        if (yield* fs.exists(dir)) {
+          yield* Effect.log(`[desktop-artifact] Removing optional native package at ${dir}`);
+          yield* fs.remove(dir, { recursive: true });
+        }
+      }),
+    ),
+  );
+
   const buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
   };
@@ -735,6 +829,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }
     buildEnv.npm_config_msvs_version = buildEnv.npm_config_msvs_version ?? "2022";
     buildEnv.GYP_MSVS_VERSION = buildEnv.GYP_MSVS_VERSION ?? "2022";
+  }
+
+  if (options.platform === "win") {
+    yield* ensureWinCodeSignCache();
   }
 
   yield* Effect.log(
