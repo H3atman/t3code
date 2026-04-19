@@ -57,7 +57,9 @@ function Invoke-Step {
     [string]$Label,
 
     [Parameter(Mandatory = $true)]
-    [string[]]$Command
+    [string[]]$Command,
+
+    [hashtable]$Environment = @{}
   )
 
   Write-Host ""
@@ -70,9 +72,27 @@ function Invoke-Step {
     $commandArgs = $Command[1..($Command.Length - 1)]
   }
 
-  & $commandName @commandArgs
-  if ($LASTEXITCODE -ne 0) {
-    throw "Command failed with exit code ${LASTEXITCODE}: $(Format-Command -Command $Command)"
+  $originalEnvironment = @{}
+  try {
+    foreach ($entry in $Environment.GetEnumerator()) {
+      $name = [string]$entry.Key
+      $originalEnvironment[$name] = [System.Environment]::GetEnvironmentVariable($name)
+      if ($null -eq $entry.Value) {
+        Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+      } else {
+        [System.Environment]::SetEnvironmentVariable($name, [string]$entry.Value)
+      }
+    }
+
+    & $commandName @commandArgs
+    if ($LASTEXITCODE -ne 0) {
+      throw "Command failed with exit code ${LASTEXITCODE}: $(Format-Command -Command $Command)"
+    }
+  }
+  finally {
+    foreach ($entry in $originalEnvironment.GetEnumerator()) {
+      [System.Environment]::SetEnvironmentVariable($entry.Key, $entry.Value)
+    }
   }
 }
 
@@ -160,42 +180,25 @@ try {
     Invoke-Step -Label "Typechecking workspace" -Command @("bun", "typecheck")
   }
 
+  $buildEnvironment = @{
+    T3CODE_DESKTOP_PLATFORM = "win"
+    T3CODE_DESKTOP_TARGET = $Target
+    T3CODE_DESKTOP_ARCH = $Arch
+    T3CODE_DESKTOP_OUTPUT_DIR = $resolvedOutputDir
+    T3CODE_DESKTOP_SKIP_BUILD = if ($SkipBuild) { "true" } else { $null }
+    T3CODE_DESKTOP_KEEP_STAGE = if ($KeepStage) { "true" } else { $null }
+    T3CODE_DESKTOP_SIGNED = if ($Signed) { "true" } else { $null }
+    T3CODE_DESKTOP_VERBOSE = if ($VerboseBuild) { "true" } else { $null }
+    T3CODE_DESKTOP_VERSION = if (-not [string]::IsNullOrWhiteSpace($Version)) { $Version } else { $null }
+  }
+
   $buildCommand = @(
     "bun",
     "run",
-    "dist:desktop:artifact",
-    "--",
-    "--platform",
-    "win",
-    "--target",
-    $Target,
-    "--arch",
-    $Arch,
-    "--output-dir",
-    $resolvedOutputDir
+    "dist:desktop:artifact"
   )
 
-  if (-not [string]::IsNullOrWhiteSpace($Version)) {
-    $buildCommand += @("--build-version", $Version)
-  }
-
-  if ($SkipBuild) {
-    $buildCommand += "--skip-build"
-  }
-
-  if ($KeepStage) {
-    $buildCommand += "--keep-stage"
-  }
-
-  if ($Signed) {
-    $buildCommand += "--signed"
-  }
-
-  if ($VerboseBuild) {
-    $buildCommand += "--verbose"
-  }
-
-  Invoke-Step -Label "Building Windows desktop artifact" -Command $buildCommand
+  Invoke-Step -Label "Building Windows desktop artifact" -Command $buildCommand -Environment $buildEnvironment
 
   $artifacts = @(Get-ChildItem -LiteralPath $resolvedOutputDir -File | Sort-Object LastWriteTime -Descending)
   $exeArtifact = $artifacts | Where-Object { $_.Extension -eq ".exe" } | Select-Object -First 1
