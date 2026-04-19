@@ -1,4 +1,6 @@
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind, type ServerProvider } from "@t3tools/contracts";
+import { LoaderIcon, RefreshCwIcon } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 
 import {
   formatProviderUsagePercent,
@@ -8,6 +10,9 @@ import {
 } from "~/lib/providerUsage";
 import { cn } from "~/lib/utils";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ensureLocalApi } from "../../localApi";
 import { useServerProviders } from "../../rpc/serverState";
 
 const SIDEBAR_PROVIDER_ORDER: readonly ProviderKind[] = ["codex", "claudeAgent"];
@@ -219,6 +224,23 @@ function SidebarProviderUsageRow(props: { provider: ServerProvider }) {
 
 export function SidebarProviderUsageCard() {
   const providers = useServerProviders();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
+  const refreshUsage = useCallback(() => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setIsRefreshing(true);
+    void ensureLocalApi()
+      .server.refreshProviders()
+      .catch((error: unknown) => {
+        console.warn("Failed to refresh providers", error);
+      })
+      .finally(() => {
+        refreshingRef.current = false;
+        setIsRefreshing(false);
+      });
+  }, []);
+
   const usageProviders = SIDEBAR_PROVIDER_ORDER.flatMap((providerKind) => {
     const provider = providers.find((candidate) => candidate.provider === providerKind);
     return provider ? [provider] : [];
@@ -231,8 +253,31 @@ export function SidebarProviderUsageCard() {
   return (
     <div className="group-data-[collapsible=icon]:hidden">
       <div className="rounded-xl border border-sidebar-border/70 bg-sidebar-accent/25 p-1.5">
-        <div className="px-2 pb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">
-          Usage limits
+        <div className="flex items-center justify-between px-2 pb-1">
+          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">
+            Usage limits
+          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                  disabled={isRefreshing}
+                  onClick={() => refreshUsage()}
+                  aria-label="Refresh usage limits"
+                >
+                  {isRefreshing ? (
+                    <LoaderIcon className="size-3 animate-spin" />
+                  ) : (
+                    <RefreshCwIcon className="size-3" />
+                  )}
+                </Button>
+              }
+            />
+            <TooltipPopup side="top">Refresh usage limits</TooltipPopup>
+          </Tooltip>
         </div>
         <div className="space-y-1">
           {usageProviders.map((provider) => (
