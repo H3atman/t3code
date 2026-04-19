@@ -29,7 +29,7 @@ import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { Debouncer } from "@tanstack/react-pacer";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useGitStatus } from "~/lib/gitStatusState";
@@ -183,46 +183,19 @@ type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
 
 function useThreadPlanCatalog(threadIds: readonly ThreadId[]): ThreadPlanCatalogEntry[] {
   return useStore(
-    useMemo(() => {
-      let previousThreadIds: readonly ThreadId[] = [];
-      let previousResult: ThreadPlanCatalogEntry[] = [];
-      let previousEntries = new Map<
-        ThreadId,
-        {
-          shell: object | null;
-          proposedPlanIds: readonly string[] | undefined;
-          proposedPlansById: Record<string, Thread["proposedPlans"][number]> | undefined;
-          entry: ThreadPlanCatalogEntry;
-        }
-      >();
-
-      return (state) => {
-        const sameThreadIds =
-          previousThreadIds.length === threadIds.length &&
-          previousThreadIds.every((id, index) => id === threadIds[index]);
-        const nextEntries = new Map<
-          ThreadId,
-          {
-            shell: object | null;
-            proposedPlanIds: readonly string[] | undefined;
-            proposedPlansById: Record<string, Thread["proposedPlans"][number]> | undefined;
-            entry: ThreadPlanCatalogEntry;
-          }
-        >();
-        const nextResult: ThreadPlanCatalogEntry[] = [];
-        let changed = !sameThreadIds;
-
-        for (const threadId of threadIds) {
-          let shell: object | undefined;
+    useCallback(
+      (state) =>
+        threadIds.flatMap((threadId) => {
           let proposedPlanIds: readonly string[] | undefined;
           let proposedPlansById: Record<string, Thread["proposedPlans"][number]> | undefined;
+          let foundShell = false;
 
           for (const environmentState of Object.values(state.environmentStateById)) {
             const matchedShell = environmentState.threadShellById[threadId];
             if (!matchedShell) {
               continue;
             }
-            shell = matchedShell;
+            foundShell = true;
             proposedPlanIds = environmentState.proposedPlanIdsByThreadId[threadId];
             proposedPlansById = environmentState.proposedPlanByThreadId[threadId] as
               | Record<string, Thread["proposedPlans"][number]>
@@ -230,40 +203,10 @@ function useThreadPlanCatalog(threadIds: readonly ThreadId[]): ThreadPlanCatalog
             break;
           }
 
-          if (!shell) {
-            const previous = previousEntries.get(threadId);
-            if (
-              previous &&
-              previous.shell === null &&
-              previous.proposedPlanIds === undefined &&
-              previous.proposedPlansById === undefined
-            ) {
-              nextEntries.set(threadId, previous);
-              continue;
-            }
-            changed = true;
-            nextEntries.set(threadId, {
-              shell: null,
-              proposedPlanIds: undefined,
-              proposedPlansById: undefined,
-              entry: { id: threadId, proposedPlans: EMPTY_PROPOSED_PLANS },
-            });
-            continue;
+          if (!foundShell) {
+            return [];
           }
 
-          const previous = previousEntries.get(threadId);
-          if (
-            previous &&
-            previous.shell === shell &&
-            previous.proposedPlanIds === proposedPlanIds &&
-            previous.proposedPlansById === proposedPlansById
-          ) {
-            nextEntries.set(threadId, previous);
-            nextResult.push(previous.entry);
-            continue;
-          }
-
-          changed = true;
           const proposedPlans =
             proposedPlanIds && proposedPlanIds.length > 0 && proposedPlansById
               ? proposedPlanIds.flatMap((planId) => {
@@ -271,26 +214,10 @@ function useThreadPlanCatalog(threadIds: readonly ThreadId[]): ThreadPlanCatalog
                   return proposedPlan ? [proposedPlan] : [];
                 })
               : EMPTY_PROPOSED_PLANS;
-          const entry = { id: threadId, proposedPlans };
-          nextEntries.set(threadId, {
-            shell,
-            proposedPlanIds,
-            proposedPlansById,
-            entry,
-          });
-          nextResult.push(entry);
-        }
-
-        if (!changed && previousResult.length === nextResult.length) {
-          return previousResult;
-        }
-
-        previousThreadIds = threadIds;
-        previousEntries = nextEntries;
-        previousResult = nextResult;
-        return nextResult;
-      };
-    }, [threadIds]),
+          return [{ id: threadId, proposedPlans }];
+        }),
+      [threadIds],
+    ),
   );
 }
 
@@ -391,7 +318,15 @@ function useLocalDispatchState(input: {
     if (!serverAcknowledgedLocalDispatch) {
       return;
     }
-    resetLocalDispatch();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) {
+        resetLocalDispatch();
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [resetLocalDispatch, serverAcknowledgedLocalDispatch]);
 
   return {
@@ -659,7 +594,9 @@ export default function ChatView(props: ChatViewProps) {
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
-  optimisticUserMessagesRef.current = optimisticUserMessages;
+  useEffect(() => {
+    optimisticUserMessagesRef.current = optimisticUserMessages;
+  }, [optimisticUserMessages]);
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
     Record<string, string | null>
   >({});
@@ -805,9 +742,9 @@ export default function ChatView(props: ChatViewProps) {
         threadIds.push(sourceThreadId);
       }
       return threadIds;
-    }, [activeLatestTurn?.sourceProposedPlan?.threadId, activeThread?.id]),
+    }, [activeLatestTurn, activeThread]),
   );
-  useEffect(() => {
+  const syncMountedTerminalThreadKeys = useEffectEvent(() => {
     setMountedTerminalThreadKeys((currentThreadIds) => {
       const nextThreadIds = reconcileMountedTerminalThreadIds({
         currentThreadIds,
@@ -821,6 +758,9 @@ export default function ChatView(props: ChatViewProps) {
         ? currentThreadIds
         : nextThreadIds;
     });
+  });
+  useEffect(() => {
+    syncMountedTerminalThreadKeys();
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalState.terminalOpen]);
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProjectRef = activeThread
@@ -1383,12 +1323,7 @@ export default function ChatView(props: ChatViewProps) {
 
     const elapsed = formatElapsed(activeLatestTurn.startedAt, activeLatestTurn.completedAt);
     return elapsed ? `Worked for ${elapsed}` : null;
-  }, [
-    activeLatestTurn?.completedAt,
-    activeLatestTurn?.startedAt,
-    latestTurnHasToolActivity,
-    latestTurnSettled,
-  ]);
+  }, [activeLatestTurn, latestTurnHasToolActivity, latestTurnSettled]);
   const completionDividerBeforeEntryId = useMemo(() => {
     if (!latestTurnSettled) return null;
     if (!completionSummary) return null;
@@ -1535,17 +1470,17 @@ export default function ChatView(props: ChatViewProps) {
     [draftId, routeThreadRef, serverThread, setStoreThreadError],
   );
 
-  const focusComposer = useCallback(() => {
+  const focusComposer = useEffectEvent(() => {
     composerRef.current?.focusAtEnd();
-  }, []);
-  const scheduleComposerFocus = useCallback(() => {
+  });
+  const scheduleComposerFocus = useEffectEvent(() => {
     window.requestAnimationFrame(() => {
       focusComposer();
     });
-  }, [focusComposer]);
-  const addTerminalContextToDraft = useCallback((selection: TerminalContextSelection) => {
+  });
+  const addTerminalContextToDraft = useEffectEvent((selection: TerminalContextSelection) => {
     composerRef.current?.addTerminalContext(selection);
-  }, []);
+  });
   const setTerminalOpen = useCallback(
     (open: boolean) => {
       if (!activeThreadRef) return;
@@ -1818,8 +1753,8 @@ export default function ChatView(props: ChatViewProps) {
     async (scriptId: string) => {
       if (!activeProject) return;
       const nextScripts = activeProject.scripts.filter((script) => script.id !== scriptId);
-
-      const deletedName = activeProject.scripts.find((s) => s.id === scriptId)?.name;
+      const deletedScript = activeProject.scripts.find((script) => script.id === scriptId);
+      const deletedActionTitle = `Deleted action "${deletedScript?.name ?? "Unknown"}"`;
 
       try {
         await persistProjectScripts({
@@ -1832,7 +1767,7 @@ export default function ChatView(props: ChatViewProps) {
         });
         toastManager.add({
           type: "success",
-          title: `Deleted action "${deletedName ?? "Unknown"}"`,
+          title: deletedActionTitle,
         });
       } catch (error) {
         toastManager.add({
@@ -1975,7 +1910,7 @@ export default function ChatView(props: ChatViewProps) {
     }
   }, []);
 
-  useEffect(() => {
+  const resetUiForActiveThreadChange = useEffectEvent(() => {
     setPullRequestDialogState(null);
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
@@ -1987,10 +1922,16 @@ export default function ChatView(props: ChatViewProps) {
       setPlanSidebarOpen(false);
     }
     planSidebarDismissedForTurnRef.current = null;
+  });
+  useEffect(() => {
+    resetUiForActiveThreadChange();
   }, [activeThread?.id]);
 
-  useEffect(() => {
+  const resetRevertingCheckpoint = useEffectEvent(() => {
     setIsRevertingCheckpoint(false);
+  });
+  useEffect(() => {
+    resetRevertingCheckpoint();
   }, [activeThread?.id]);
 
   useEffect(() => {
@@ -2001,7 +1942,7 @@ export default function ChatView(props: ChatViewProps) {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeThread?.id, focusComposer, terminalState.terminalOpen]);
+  }, [activeThread?.id, terminalState.terminalOpen]);
 
   useEffect(() => {
     if (!activeThread?.id) return;
@@ -2031,7 +1972,7 @@ export default function ChatView(props: ChatViewProps) {
     };
   }, [activeThread?.id, activeThread?.messages, handoffAttachmentPreviews, optimisticUserMessages]);
 
-  useEffect(() => {
+  const resetComposerStateForThreadScope = useEffectEvent(() => {
     setOptimisticUserMessages((existing) => {
       for (const message of existing) {
         revokeUserMessagePreviewUrls(message);
@@ -2040,6 +1981,9 @@ export default function ChatView(props: ChatViewProps) {
     });
     resetLocalDispatch();
     setExpandedImage(null);
+  });
+  useEffect(() => {
+    resetComposerStateForThreadScope();
   }, [draftId, resetLocalDispatch, threadId]);
 
   const closeExpandedImage = useCallback(() => {
@@ -2071,20 +2015,22 @@ export default function ChatView(props: ChatViewProps) {
     isGitRepo,
   });
 
-  useEffect(() => {
+  const resetPendingServerThreadOverrides = useEffectEvent(() => {
     setPendingServerThreadEnvMode(null);
     setPendingServerThreadBranch(undefined);
+  });
+  useEffect(() => {
+    resetPendingServerThreadOverrides();
   }, [activeThread?.id]);
 
   useEffect(() => {
     if (canOverrideServerThreadEnvMode) {
       return;
     }
-    setPendingServerThreadEnvMode(null);
-    setPendingServerThreadBranch(undefined);
+    resetPendingServerThreadOverrides();
   }, [canOverrideServerThreadEnvMode]);
 
-  useEffect(() => {
+  const syncTerminalLaunchContextForActiveThread = useEffectEvent(() => {
     if (!activeThreadId) {
       setTerminalLaunchContext(null);
       storeClearTerminalLaunchContext(routeThreadRef);
@@ -2095,9 +2041,12 @@ export default function ChatView(props: ChatViewProps) {
       if (current.threadId === activeThreadId) return current;
       return null;
     });
+  });
+  useEffect(() => {
+    syncTerminalLaunchContextForActiveThread();
   }, [activeThreadId, routeThreadRef, storeClearTerminalLaunchContext]);
 
-  useEffect(() => {
+  const syncTerminalLaunchContextWithResolvedPaths = useEffectEvent(() => {
     if (!activeThreadId || !activeProjectCwd) {
       return;
     }
@@ -2120,6 +2069,9 @@ export default function ChatView(props: ChatViewProps) {
       }
       return current;
     });
+  });
+  useEffect(() => {
+    syncTerminalLaunchContextWithResolvedPaths();
   }, [
     activeProjectCwd,
     activeThreadId,
@@ -2153,7 +2105,7 @@ export default function ChatView(props: ChatViewProps) {
     storeServerTerminalLaunchContext,
   ]);
 
-  useEffect(() => {
+  const clearTerminalLaunchContextWhenTerminalCloses = useEffectEvent(() => {
     if (terminalState.terminalOpen) {
       return;
     }
@@ -2161,6 +2113,9 @@ export default function ChatView(props: ChatViewProps) {
       storeClearTerminalLaunchContext(activeThreadRef);
     }
     setTerminalLaunchContext((current) => (current?.threadId === activeThreadId ? null : current));
+  });
+  useEffect(() => {
+    clearTerminalLaunchContextWhenTerminalCloses();
   }, [
     activeThreadId,
     activeThreadRef,
@@ -2168,6 +2123,9 @@ export default function ChatView(props: ChatViewProps) {
     terminalState.terminalOpen,
   ]);
 
+  const bumpTerminalFocusRequest = useEffectEvent(() => {
+    setTerminalFocusRequestId((value) => value + 1);
+  });
   useEffect(() => {
     if (!activeThreadKey) return;
     const previous = terminalOpenByThreadRef.current[activeThreadKey] ?? false;
@@ -2175,7 +2133,7 @@ export default function ChatView(props: ChatViewProps) {
 
     if (!previous && current) {
       terminalOpenByThreadRef.current[activeThreadKey] = current;
-      setTerminalFocusRequestId((value) => value + 1);
+      bumpTerminalFocusRequest();
       return;
     } else if (previous && !current) {
       terminalOpenByThreadRef.current[activeThreadKey] = current;
@@ -2188,7 +2146,7 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     terminalOpenByThreadRef.current[activeThreadKey] = current;
-  }, [activeThreadKey, focusComposer, terminalState.terminalOpen]);
+  }, [activeThreadKey, terminalState.terminalOpen]);
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
@@ -2698,7 +2656,7 @@ export default function ChatView(props: ChatViewProps) {
     [activePendingUserInput],
   );
 
-  const onSelectActivePendingUserInputOption = useCallback(
+  const onSelectActivePendingUserInputOption = useEffectEvent(
     (questionId: string, optionLabel: string) => {
       if (!activePendingUserInput) {
         return;
@@ -2728,10 +2686,9 @@ export default function ChatView(props: ChatViewProps) {
       promptRef.current = "";
       composerRef.current?.resetCursorState({ cursor: 0 });
     },
-    [activePendingProgress?.activeQuestion, activePendingUserInput],
   );
 
-  const onChangeActivePendingUserInputCustomAnswer = useCallback(
+  const onChangeActivePendingUserInputCustomAnswer = useEffectEvent(
     (
       questionId: string,
       value: string,
@@ -2762,7 +2719,6 @@ export default function ChatView(props: ChatViewProps) {
         composerRef.current?.focusAt(nextCursor);
       }
     },
-    [activePendingUserInput],
   );
 
   const onAdvanceActivePendingUserInput = useCallback(() => {
@@ -2791,7 +2747,7 @@ export default function ChatView(props: ChatViewProps) {
     setActivePendingUserInputQuestionIndex(Math.max(activePendingProgress.questionIndex - 1, 0));
   }, [activePendingProgress, setActivePendingUserInputQuestionIndex]);
 
-  const onSubmitPlanFollowUp = useCallback(
+  const onSubmitPlanFollowUp = useEffectEvent(
     async ({
       text,
       interactionMode: nextInteractionMode,
@@ -2860,6 +2816,14 @@ export default function ChatView(props: ChatViewProps) {
         },
       ]);
 
+      const sourceProposedPlan =
+        nextInteractionMode === "default" && activeProposedPlan
+          ? {
+              threadId: activeThread.id,
+              planId: activeProposedPlan.id,
+            }
+          : undefined;
+
       try {
         await persistThreadSettingsForNextTurn({
           threadId: threadIdForSend,
@@ -2890,14 +2854,7 @@ export default function ChatView(props: ChatViewProps) {
           titleSeed: activeThread.title,
           runtimeMode,
           interactionMode: nextInteractionMode,
-          ...(nextInteractionMode === "default" && activeProposedPlan
-            ? {
-                sourceProposedPlan: {
-                  threadId: activeThread.id,
-                  planId: activeProposedPlan.id,
-                },
-              }
-            : {}),
+          sourceProposedPlan,
           createdAt: messageCreatedAt,
         });
         // Optimistically open the plan sidebar when implementing (not refining).
@@ -2920,23 +2877,9 @@ export default function ChatView(props: ChatViewProps) {
         resetLocalDispatch();
       }
     },
-    [
-      activeThread,
-      activeProposedPlan,
-      beginLocalDispatch,
-      isConnecting,
-      isSendBusy,
-      isServerThread,
-      persistThreadSettingsForNextTurn,
-      resetLocalDispatch,
-      runtimeMode,
-      setComposerDraftInteractionMode,
-      setThreadError,
-      environmentId,
-    ],
   );
 
-  const onImplementPlanInNewThread = useCallback(async () => {
+  const onImplementPlanInNewThread = useEffectEvent(async () => {
     const api = readEnvironmentApi(environmentId);
     if (
       !api ||
@@ -3050,20 +2993,7 @@ export default function ChatView(props: ChatViewProps) {
         });
       })
       .then(finish, finish);
-  }, [
-    activeProject,
-    activeProposedPlan,
-    activeThreadBranch,
-    activeThread,
-    beginLocalDispatch,
-    isConnecting,
-    isSendBusy,
-    isServerThread,
-    navigate,
-    resetLocalDispatch,
-    runtimeMode,
-    environmentId,
-  ]);
+  });
 
   const onProviderModelSelect = useCallback(
     (provider: ProviderKind, model: string) => {
@@ -3153,17 +3083,13 @@ export default function ChatView(props: ChatViewProps) {
   );
   // Both the Map and the revert handler are read from refs at call-time so
   // the callback reference is fully stable and never busts context identity.
-  const revertTurnCountRef = useRef(revertTurnCountByUserMessageId);
-  revertTurnCountRef.current = revertTurnCountByUserMessageId;
-  const onRevertToTurnCountRef = useRef(onRevertToTurnCount);
-  onRevertToTurnCountRef.current = onRevertToTurnCount;
-  const onRevertUserMessage = useCallback((messageId: MessageId) => {
-    const targetTurnCount = revertTurnCountRef.current.get(messageId);
+  const onRevertUserMessage = useEffectEvent((messageId: MessageId) => {
+    const targetTurnCount = revertTurnCountByUserMessageId.get(messageId);
     if (typeof targetTurnCount !== "number") {
       return;
     }
-    void onRevertToTurnCountRef.current(targetTurnCount);
-  }, []);
+    void onRevertToTurnCount(targetTurnCount);
+  });
 
   // Empty state: no active thread
   if (!activeThread) {

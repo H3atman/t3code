@@ -538,9 +538,9 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   const authLabel = codexAuthSubLabel(account);
   const usage =
     parsed.auth.status === "authenticated" && authType !== "apiKey" && resolveUsage
-      ? yield* resolveUsage({
-          ...(codexSettings.homePath ? { homePath: codexSettings.homePath } : {}),
-        }).pipe(Effect.orElseSucceed(() => undefined))
+      ? yield* resolveUsage(
+          codexSettings.homePath ? { homePath: codexSettings.homePath } : {},
+        ).pipe(Effect.orElseSucceed(() => undefined))
       : undefined;
   return buildServerProvider({
     provider: PROVIDER,

@@ -3,6 +3,7 @@
   "ignorePatterns": [
     ".reference",
     ".plans",
+    ".claude",
     "dist",
     "dist-electron",
     "node_modules",
